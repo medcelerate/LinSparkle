@@ -1,6 +1,6 @@
 [package]
 name = "linsparkle"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Sparkle-style updates for Linux AppImages: the same appcasts and Ed25519 signatures as Sparkle and WinSparkle"
 license = "MIT OR Apache-2.0"
@@ -10,14 +10,16 @@ keywords = ["update", "sparkle", "appimage", "linux", "updater"]
 categories = ["gui", "os::linux-apis"]
 
 [dependencies]
-base64 = "0.23.1"
-ed25519-dalek = "3.0.0"
-flate2 = "1.1.10"
-png = "0.18.1"
-roxmltree = "0.21.1"
+# Loose on purpose: a library shouldn't force the app using it onto newer
+# patch releases than it needs.
+base64 = "0.23"
+ed25519-dalek = "3"
+flate2 = "1"
+png = "0.18"
+roxmltree = "0.21"
 slint = { version = "1.17", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-systemfonts"] }
-tar = "0.4.46"
-ureq = "3.4.2"
+tar = "0.4"
+ureq = "3"
 
 [features]
 # The C API (linsparkle_* functions, include/linsparkle.h). Build the C
