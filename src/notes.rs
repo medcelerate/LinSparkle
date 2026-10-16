@@ -76,14 +76,15 @@ pub fn html_to_text(html: &str) -> String {
             rest = &rest[c.len_utf8()..];
             continue;
         }
-        if c == '&' {
-            if let Some(semi) = rest[..rest.len().min(12)].find(';') {
-                if let Some(ch) = decode_entity(&rest[1..semi]) {
-                    out.push(ch);
-                    rest = &rest[semi + 1..];
-                    continue;
-                }
-            }
+        // Entities are short; look for the ';' by byte so a multi-byte
+        // character nearby can't split a slice.
+        if c == '&'
+            && let Some(semi) = rest.bytes().take(12).position(|b| b == b';')
+            && let Some(ch) = decode_entity(&rest[1..semi])
+        {
+            out.push(ch);
+            rest = &rest[semi + 1..];
+            continue;
         }
         // HTML whitespace collapses to one space.
         if c.is_whitespace() {
@@ -130,5 +131,11 @@ mod tests {
     fn drops_head_and_scripts() {
         let html = "<html><head><title>x</title><style>p{}</style></head><body><!-- hi --><p>A&#39;s &#x263A;</p><script>alert(1)</script></body></html>";
         assert_eq!(html_to_text(html), "A's ☺");
+    }
+
+    #[test]
+    fn keeps_a_bare_ampersand_before_multibyte_text() {
+        assert_eq!(html_to_text("<p>R&D für Ünïcødé ✓</p>"), "R&D für Ünïcødé ✓");
+        assert_eq!(html_to_text("Tom & Jérôme"), "Tom & Jérôme");
     }
 }

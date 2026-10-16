@@ -18,3 +18,8 @@ roxmltree = "0.21.1"
 slint = { version = "1.17", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-systemfonts"] }
 tar = "0.4.46"
 ureq = "3.4.2"
+
+[features]
+# The C API (linsparkle_* functions, include/linsparkle.h). Build the C
+# libraries with scripts/build-c-libs.sh.
+capi = []

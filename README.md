@@ -45,6 +45,43 @@ fn main() {
 | `win_sparkle_check_update_without_ui` | `check_update_without_ui` |
 | `win_sparkle_cleanup` | `cleanup` |
 
+## From C and C++
+
+Each [release](https://github.com/medcelerate/LinSparkle/releases) has
+`linsparkle-<version>-<target>.tar.gz` packages for x86_64 and aarch64 Linux.
+Each package holds `include/linsparkle.h`, `lib/liblinsparkle.so`,
+`lib/liblinsparkle.a` and `lib/pkgconfig/linsparkle.pc`. The functions are
+WinSparkle's, renamed from `win_sparkle_*` to `linsparkle_*`. The same header
+works from C++.
+
+```c
+#include <linsparkle.h>
+
+int main(int argc, char **argv) {
+    linsparkle_run_if_helper();   /* first thing in main */
+    linsparkle_set_appcast_url("https://example.com/appcast/linux.xml");
+    linsparkle_set_eddsa_public_key("<base64 Ed25519 public key>");
+    linsparkle_set_app_details("My App", "1.2.0");
+    linsparkle_set_shutdown_request_callback(quit_my_app);
+    linsparkle_init();
+    /* ... */
+    linsparkle_cleanup();
+}
+```
+
+```sh
+export PKG_CONFIG_PATH=/path/to/linsparkle-<version>-<target>/lib/pkgconfig
+cc app.c $(pkg-config --cflags --libs linsparkle)          # shared
+cc app.c $(pkg-config --cflags linsparkle) /path/to/lib/liblinsparkle.a \
+   $(pkg-config --libs-only-l --static linsparkle | sed 's/-llinsparkle//')   # static
+```
+
+The shared library exports only the `linsparkle_*` functions. The static
+library has Slint inside it, so don't link it into an app that also links
+Slint; use the shared library there. To build the packages yourself, run
+`scripts/build-c-libs.sh [target]`. It also links C and C++ smoke tests
+against both libraries and runs them.
+
 ## How it works
 
 - **A helper process owns the UI.** The check and the update window run in a

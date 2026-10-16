@@ -1,0 +1,103 @@
+name: CI
+
+# Tests on Linux, then builds the C libraries (static and shared, with the
+# header and a pkg-config file) for x86_64 and aarch64 Linux. A v* tag also
+# publishes them as a GitHub release.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Slint's system-font lookup, and the window system headers winit's
+  # build checks for.
+  APT_PACKAGES: libfontconfig1-dev libxkbcommon-dev libwayland-dev
+
+jobs:
+  test:
+    name: Rust tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-features
+      - run: cargo clippy --all-features --all-targets -- -D warnings
+
+  c-libs:
+    name: C libraries (${{ matrix.target }})
+    needs: test
+    # The oldest supported Ubuntu: the libraries need this glibc or newer.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES g++ pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build, link the C and C++ smoke tests, package
+        run: scripts/build-c-libs.sh ${{ matrix.target }}
+
+      - name: Check the shared library exports only linsparkle_*
+        run: |
+          LIB=$(ls dist/*/lib/liblinsparkle.so)
+          nm -D --defined-only "$LIB" | awk '{print $3}' | grep -v '^linsparkle_' && { echo "unexpected exports"; exit 1; } || true
+          nm -D --defined-only "$LIB" | awk '{print $3}' | sort
+          readelf -d "$LIB" | grep -E 'SONAME|NEEDED'
+
+      - name: Build against the package with pkg-config
+        run: |
+          export PKG_CONFIG_PATH=$(ls -d "$PWD"/dist/*/lib/pkgconfig)
+          cc -std=c99 tests/c/smoke.c $(pkg-config --cflags --libs linsparkle) -Wl,-rpath,"$PKG_CONFIG_PATH/.." -o smoke-pc
+          ./smoke-pc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linsparkle-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: c-libs
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "v$VERSION" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $VERSION"; exit 1; }
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true

@@ -5,21 +5,19 @@
 //! calls mirror WinSparkle's:
 //!
 //! ```no_run
-//! fn main() {
-//!     // First thing: LinSparkle's UI runs as this same executable in a
-//!     // helper process, and this is where that process branches off.
-//!     linsparkle::run_if_helper();
+//! // First thing in main: LinSparkle's UI runs as this same executable in a
+//! // helper process, and this is where that process branches off.
+//! linsparkle::run_if_helper();
 //!
-//!     linsparkle::set_appcast_url("https://example.com/appcast/linux.xml");
-//!     linsparkle::set_eddsa_public_key("<base64 Ed25519 public key>");
-//!     linsparkle::set_app_details("My App", env!("CARGO_PKG_VERSION"));
-//!     linsparkle::set_shutdown_request_callback(|| { /* quit the app */ });
-//!     linsparkle::init();
-//!     // ... a "Check for Updates…" menu item calls:
-//!     linsparkle::check_update_with_ui();
-//!     // ... and on exit:
-//!     linsparkle::cleanup();
-//! }
+//! linsparkle::set_appcast_url("https://example.com/appcast/linux.xml");
+//! linsparkle::set_eddsa_public_key("<base64 Ed25519 public key>");
+//! linsparkle::set_app_details("My App", env!("CARGO_PKG_VERSION"));
+//! linsparkle::set_shutdown_request_callback(|| { /* quit the app */ });
+//! linsparkle::init();
+//! // ... a "Check for Updates…" menu item calls:
+//! linsparkle::check_update_with_ui();
+//! // ... and on exit:
+//! linsparkle::cleanup();
 //! ```
 //!
 //! The UI is a separate process so it never touches the app's own event
@@ -28,6 +26,8 @@
 //! and calls the shutdown callback for the app to quit.
 
 mod appcast;
+#[cfg(feature = "capi")]
+mod capi;
 mod install;
 mod notes;
 mod prefs;
@@ -238,10 +238,10 @@ pub fn cleanup() {
 
 fn spawn_helper(interactive: bool) {
     let mut s = state();
-    if let Some(child) = s.helper.as_mut() {
-        if matches!(child.try_wait(), Ok(None)) {
-            return;
-        }
+    if let Some(child) = s.helper.as_mut()
+        && matches!(child.try_wait(), Ok(None))
+    {
+        return;
     }
     let cfg = &s.config;
     if cfg.appcast_url.is_empty() || cfg.public_key.is_empty() || cfg.app_version.is_empty() {
@@ -283,10 +283,10 @@ fn spawn_helper(interactive: bool) {
         let shutdown = s.shutdown.clone();
         let spawned = std::thread::Builder::new().name("linsparkle".into()).spawn(move || {
             for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
-                if line.trim() == SHUTDOWN_LINE {
-                    if let Some(f) = &shutdown {
-                        f();
-                    }
+                if line.trim() == SHUTDOWN_LINE
+                    && let Some(f) = &shutdown
+                {
+                    f();
                 }
             }
         });
