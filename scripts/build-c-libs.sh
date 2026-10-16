@@ -11,7 +11,9 @@ TARGET=${1:-$(rustc -vV | sed -n 's/^host: //p')}
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 NAME="linsparkle-$VERSION-$TARGET"
 OUT="dist/$NAME"
-CARGO=(cargo rustc --release --lib --features capi --target "$TARGET")
+# --color never: the library list below is read from rustc's output, and
+# CARGO_TERM_COLOR=always (as CI sets it) would wrap it in escape codes.
+CARGO=(cargo rustc --color never --release --lib --features capi --target "$TARGET")
 rm -rf "$OUT" && mkdir -p "$OUT/include" "$OUT/lib/pkgconfig"
 
 # Static library, and the system libraries anything linking it also needs
