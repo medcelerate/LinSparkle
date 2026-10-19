@@ -15,6 +15,7 @@ categories = ["gui", "os::linux-apis"]
 base64 = "0.23"
 ed25519-dalek = "3"
 flate2 = "1"
+libc = "0.2"
 png = "0.18"
 roxmltree = "0.21"
 slint = { version = "1.17", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-systemfonts"] }

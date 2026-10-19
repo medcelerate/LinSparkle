@@ -305,6 +305,18 @@ fn megabytes(bytes: u64) -> String {
 
 /// Run the helper; returns the process exit code.
 pub fn run(cfg: Config, interactive: bool, host_pid: u32, can_relaunch: bool) -> i32 {
+    // The helper is the host app's own executable, so Slint's default pick
+    // is among whatever renderers the app compiled in: Skia or FemtoVG over
+    // OpenGL, say, which in an app that sets its renderer up itself can show
+    // this window mostly unpainted. The software renderer is the one
+    // LinSparkle brings, so use it.
+    if let Err(e) = slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("software".into())
+        .select()
+    {
+        eprintln!("linsparkle: couldn't select the software renderer, using the default: {e}");
+    }
     let window = match UpdateWindow::new() {
         Ok(w) => w,
         Err(e) => {

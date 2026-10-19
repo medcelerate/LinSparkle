@@ -202,6 +202,7 @@ pub fn relaunch_after_exit(pid: u32, target: &Path) -> Result<(), String> {
         .stderr(std::process::Stdio::null())
         .process_group(0);
     crate::clean_env(&mut cmd);
+    no_inherited_fds(&mut cmd);
     cmd.spawn().map(drop).map_err(|e| format!("couldn't schedule the relaunch: {e}"))
 }
 
@@ -213,8 +214,51 @@ pub fn open_url(url: &str) {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
     crate::clean_env(&mut cmd);
+    no_inherited_fds(&mut cmd);
     if let Err(e) = cmd.spawn() {
         eprintln!("linsparkle: couldn't open {url}: {e}");
+    }
+}
+
+/// Start `cmd` with only stdin, stdout and stderr. This process inherits
+/// the AppImage runtime's keep-alive pipe (and whatever else the app left
+/// open), and the runtime keeps its mount until every copy of that pipe is
+/// closed: handed on to the relaunched app or a browser, it would keep the
+/// replaced AppImage mounted, and its runtime running, as long as they run.
+fn no_inherited_fds(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: between fork and exec this only makes async-signal-safe
+    // syscalls: no allocation, no locks. Close-on-exec rather than closing,
+    // so the Command's own exec-error pipe keeps working until the exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            cloexec_from(3);
+            Ok(())
+        });
+    }
+}
+
+fn cloexec_from(first: libc::c_int) {
+    // Linux 5.11+ does it in one call.
+    #[cfg(target_os = "linux")]
+    if unsafe {
+        libc::syscall(libc::SYS_close_range, first as libc::c_uint, libc::c_uint::MAX, libc::CLOSE_RANGE_CLOEXEC)
+    } == 0
+    {
+        return;
+    }
+    let max = match unsafe { libc::sysconf(libc::_SC_OPEN_MAX) } {
+        n if n > 0 => n.min(65536) as libc::c_int,
+        _ => 1024,
+    };
+    for fd in first..max {
+        // On a descriptor that isn't open this just fails with EBADF.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
     }
 }
 
@@ -313,6 +357,26 @@ mod tests {
         let mut unsigned = item(String::new(), &good);
         unsigned.ed_signature = None;
         assert!(download(&agent, &cfg, &unsigned, &cancel, |_, _| {}).is_err());
+    }
+
+    #[test]
+    fn children_inherit_no_extra_fds() {
+        // Inheritable, like the AppImage runtime's keep-alive pipe. Numbered
+        // high so it can't be mistaken for one `ls` opens itself.
+        let fd = unsafe { libc::fcntl(2, libc::F_DUPFD, 100) };
+        assert!(fd >= 100);
+        let child_has_it = |strip: bool| {
+            let mut cmd = std::process::Command::new("/bin/sh");
+            cmd.arg("-c").arg("ls /dev/fd");
+            if strip {
+                no_inherited_fds(&mut cmd);
+            }
+            let out = cmd.output().unwrap();
+            String::from_utf8_lossy(&out.stdout).split_whitespace().any(|n| n == fd.to_string())
+        };
+        assert!(child_has_it(false));
+        assert!(!child_has_it(true));
+        unsafe { libc::close(fd) };
     }
 
     #[test]
