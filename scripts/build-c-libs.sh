@@ -190,6 +190,8 @@ CMAKE_ARGS=(-DCMAKE_PREFIX_PATH="$PWD/$OUT" -DCMAKE_BUILD_TYPE=Release)
 cmake -S tests/cmake -B "$TESTS/cmake" "${CMAKE_ARGS[@]}" -DLINSPARKLE_VERSION="$VERSION" > /dev/null
 cmake --build "$TESTS/cmake" > /dev/null
 for t in c-static cpp-static c-shared cpp-shared; do "$TESTS/cmake/cmake-$t"; done
+# The series itself (find_package(linsparkle 0.2) for 0.2.1) is accepted.
+cmake -S tests/cmake -B "$TESTS/cmake-series" "${CMAKE_ARGS[@]}" -DLINSPARKLE_VERSION="$MAJOR.$MINOR" > /dev/null
 if cmake -S tests/cmake -B "$TESTS/cmake-other" "${CMAKE_ARGS[@]}" -DLINSPARKLE_VERSION="$((MAJOR + 1)).0" > /dev/null 2>&1; then
   echo "find_package accepted linsparkle $((MAJOR + 1)).0" >&2
   exit 1

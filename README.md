@@ -80,7 +80,7 @@ from wherever it's unpacked), or fetch it:
 ```cmake
 include(FetchContent)
 FetchContent_Declare(linsparkle
-  URL https://github.com/medcelerate/LinSparkle/releases/download/v0.2.0/linsparkle-0.2.0-x86_64-unknown-linux-gnu.tar.gz
+  URL https://github.com/medcelerate/LinSparkle/releases/download/v0.2.1/linsparkle-0.2.1-x86_64-unknown-linux-gnu.tar.gz
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(linsparkle)   # or skip these and set CMAKE_PREFIX_PATH
 find_package(linsparkle 0.2 REQUIRED PATHS ${linsparkle_SOURCE_DIR})
@@ -133,9 +133,10 @@ CMake, and runs them.
 ## Bundle mode
 
 For a suite of apps shipped as AppImages installed side by side, say
-`~/Applications/Suite/Editor.AppImage`, `Player.AppImage` and
-`Converter.AppImage`: one update, from any of them, replaces them all, like
-a macOS suite `.pkg`. It's off by default; turn it on in each app:
+`~/Applications/Suite/Suite_Editor-x86_64.AppImage`,
+`Suite_Player-x86_64.AppImage` and `Suite_Converter-x86_64.AppImage`: one
+update, from any of them, replaces them all, like a macOS suite `.pkg`. It's
+off by default; turn it on in each app:
 
 ```rust
 linsparkle::set_bundle_mode(true);
@@ -155,19 +156,33 @@ item's `sparkle:edSignature` before anything is written, as always.
 ```json
 {
   "members": [
-    { "file": "Editor.AppImage", "id": "editor" },
-    { "file": "Player.AppImage", "id": "player" },
-    { "file": "Converter.AppImage", "id": "converter" }
+    { "file": "Suite_Editor-x86_64.AppImage", "id": "editor", "name": "Suite Editor" },
+    { "file": "Suite_Player-x86_64.AppImage", "id": "player", "name": "Suite Player" },
+    { "file": "Suite_Converter-x86_64.AppImage", "id": "converter", "name": "Suite Converter" }
   ]
 }
 ```
 
-Each member's `file` is the name it's installed under; `id` is optional.
-Without a manifest every ELF file in the archive is a member. Build it flat,
-with the main app first (see [older versions](#older-versions-and-bundles)):
+Each member's `file` is the name it's installed under. The rest are
+optional:
+
+- `id` finds the running app's member even if its AppImage was renamed (see
+  below).
+- `name` (since 0.2.1) is what the update window calls the app, as in "It
+  also updates Suite Player and Suite Converter." Without one, the window
+  uses the file name less `.AppImage`. It's plain text: trimmed, at most 64
+  characters, with no control characters, line breaks or bidirectional
+  formatting characters; a manifest with any other `name` is refused.
+  LinSparkle 0.2.0 ignores it. The running app is called by its
+  `set_app_details` name, as before.
+
+Without a manifest every ELF file in the archive is a member, called by its
+file name. Build it flat, with the main app first (see
+[older versions](#older-versions-and-bundles)):
 
 ```sh
-tar czf Suite-1.2.0.tar.gz -C build Editor.AppImage Player.AppImage Converter.AppImage linsparkle-bundle.json
+tar czf Suite-1.2.0.tar.gz -C build Suite_Editor-x86_64.AppImage Suite_Player-x86_64.AppImage \
+    Suite_Converter-x86_64.AppImage linsparkle-bundle.json
 ```
 
 **What it installs.** In the directory of the running AppImage (`$APPIMAGE`,
@@ -185,7 +200,8 @@ or `set_install_path`), and nowhere else:
   be, the rest still are and the error says which.
 - Each installed file is executable (`+x`, plus whatever wider permissions
   the old file had).
-- The update window says which other apps the update also replaces.
+- The update window says which other apps the update also replaces, by
+  their manifest `name`s.
 
 **Other apps that are open** keep running: renaming over a running AppImage
 is fine on Linux, and the new version starts when that app is next opened.
@@ -198,8 +214,8 @@ Only the app that installed the update is relaunched.
 any entry is a link (symbolic or hard), a directory other than the archive's
 own `./`, or anything but a regular file; if any name has a `/` or is `..`;
 if a name appears twice; or if the manifest lists a name that isn't a plain
-file name (no `/`, not starting with `.`), or a file the archive doesn't
-hold as an executable. Other files (a README, macOS `._` files) are ignored.
+file name (no `/`, not starting with `.`), a file the archive doesn't hold
+as an executable, or a `name` that isn't plain text (see above). Other files (a README, macOS `._` files) are ignored.
 
 ### Older versions and bundles
 

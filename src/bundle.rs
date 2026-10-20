@@ -5,10 +5,14 @@
 //!
 //! ```json
 //! { "members": [
-//!     { "file": "Loop Alchemy.AppImage", "id": "loop-alchemy" },
-//!     { "file": "Show Alchemy.AppImage", "id": "show-alchemy" }
+//!     { "file": "Loop Alchemy.AppImage", "id": "loop-alchemy", "name": "Loop Alchemy" },
+//!     { "file": "Show Alchemy.AppImage", "id": "show-alchemy", "name": "Show Alchemy" }
 //! ] }
 //! ```
+//!
+//! `id` and `name` are optional. `name` is what the update window calls the
+//! member; without one, it uses the file name less `.AppImage`
+//! (`file_label`).
 //!
 //! Without a manifest, every ELF file in the archive is a member. The
 //! running AppImage is replaced by its member (the one with the app id set
@@ -29,11 +33,43 @@ use tar::EntryType;
 pub const MANIFEST: &str = "linsparkle-bundle.json";
 const MAX_MANIFEST: u64 = 64 * 1024;
 const ELF_MAGIC: &[u8] = b"\x7fELF";
+/// The longest display name a manifest may give, in characters.
+pub const MAX_DISPLAY_NAME: usize = 64;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Member {
     pub file: String,
     pub id: Option<String>,
+    /// The display name from the manifest, if it gives one.
+    pub name: Option<String>,
+}
+
+/// A file name as an app name: without its `.AppImage` (in any case).
+pub fn file_label(file: &str) -> String {
+    let cut = file.len().saturating_sub(".AppImage".len());
+    match file.get(cut..) {
+        Some(ext) if cut > 0 && ext.eq_ignore_ascii_case(".AppImage") => file[..cut].to_string(),
+        _ => file.to_string(),
+    }
+}
+
+/// A display name: plain text on one line, at most `MAX_DISPLAY_NAME`
+/// characters once trimmed, none of them control or bidirectional
+/// formatting characters (which could reorder the text around it).
+pub fn check_display_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    let bidi = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+    let line_break = |c: char| matches!(c, '\u{2028}' | '\u{2029}');
+    if name.is_empty() {
+        return Err("is empty".into());
+    }
+    if name.chars().count() > MAX_DISPLAY_NAME {
+        return Err(format!("is longer than {MAX_DISPLAY_NAME} characters"));
+    }
+    if name.chars().any(|c| c.is_control() || bidi(c) || line_break(c)) {
+        return Err("has a control character".into());
+    }
+    Ok(name.to_string())
 }
 
 /// What a bundle will do in one install directory.
@@ -129,6 +165,13 @@ fn parse_manifest(text: &[u8]) -> Result<Vec<Member>, String> {
             Some(serde_json::Value::String(id)) => Some(id.clone()),
             Some(_) => return Err(bad("has a member whose \"id\" isn't a string")),
         };
+        let name = match m.get("name") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(name)) => Some(
+                check_display_name(name).map_err(|why| bad(&format!("has a \"name\" for “{file}” that {why}")))?,
+            ),
+            Some(_) => return Err(bad("has a member whose \"name\" isn't a string")),
+        };
         check_name(file)?;
         if members.iter().any(|o: &Member| o.file == file) {
             return Err(bad(&format!("lists “{file}” twice")));
@@ -136,7 +179,7 @@ fn parse_manifest(text: &[u8]) -> Result<Vec<Member>, String> {
         if id.is_some() && members.iter().any(|o: &Member| o.id == id) {
             return Err(bad(&format!("uses the id “{}” twice", id.unwrap_or_default())));
         }
-        members.push(Member { file: file.to_string(), id });
+        members.push(Member { file: file.to_string(), id, name });
     }
     if members.is_empty() {
         return Err(bad("lists no members"));
@@ -190,7 +233,7 @@ pub fn members(data: &[u8]) -> Result<Vec<Member>, String> {
         None => elves
             .into_iter()
             .filter(|name| !name.starts_with('.'))
-            .map(|file| Member { file, id: None })
+            .map(|file| Member { file, id: None, name: None })
             .collect(),
     };
     for m in &members {
@@ -307,6 +350,7 @@ pub(crate) mod tests {
         assert_eq!(names(&m), ["Show.AppImage", "Loop.AppImage"]);
         assert_eq!(m[0].id.as_deref(), Some("show"));
         assert_eq!(m[1].id, None);
+        assert_eq!((m[0].name.as_deref(), m[1].name.as_deref()), (None, None));
 
         // Listed but missing, or not an executable.
         let tgz = bundle(&[("Loop.AppImage", &a), (MANIFEST, manifest)]);
@@ -324,12 +368,73 @@ pub(crate) mod tests {
             br#"{"members": []}"#,
             br#"{"members": [{"id": "x"}]}"#,
             br#"{"members": [{"file": "Loop.AppImage", "id": 3}]}"#,
+            br#"{"members": [{"file": "Loop.AppImage", "name": 3}]}"#,
+            br#"{"members": [{"file": "Loop.AppImage", "name": ["Loop"]}]}"#,
+            br#"{"members": [{"file": "Loop.AppImage", "name": "  "}]}"#,
+            br#"{"members": [{"file": "Loop.AppImage", "name": "Loop\nAlchemy"}]}"#,
             br#"["Loop.AppImage"]"#,
             b"not json",
         ] {
             let tgz = bundle(&[("Loop.AppImage", &a), (MANIFEST, bad)]);
             assert!(members(&tgz).is_err(), "{}", String::from_utf8_lossy(bad));
         }
+    }
+
+    #[test]
+    fn members_with_display_names() {
+        let (a, b, c) = (elf("loop"), elf("show"), elf("trace"));
+        let manifest = br#"{"members": [
+            {"file": "Excalibur_Loop_Alchemy-x86_64.AppImage", "id": "loop", "name": "Loop Alchemy"},
+            {"file": "Excalibur_Show_Alchemy-x86_64.AppImage", "name": "Show Alchemy"},
+            {"file": "Excalibur_Trace_Alchemy-x86_64.AppImage", "id": "trace"}]}"#;
+        let tgz = bundle(&[
+            ("Excalibur_Loop_Alchemy-x86_64.AppImage", &a),
+            ("Excalibur_Show_Alchemy-x86_64.AppImage", &b),
+            ("Excalibur_Trace_Alchemy-x86_64.AppImage", &c),
+            (MANIFEST, manifest),
+        ]);
+        let m = members(&tgz).unwrap();
+        assert_eq!(m[0].name.as_deref(), Some("Loop Alchemy"));
+        assert_eq!(m[1].id, None);
+        assert_eq!(m[2].name, None);
+        assert_eq!(m[1].name.as_deref(), Some("Show Alchemy"));
+    }
+
+    #[test]
+    fn display_names() {
+        assert_eq!(check_display_name("Show Alchemy").unwrap(), "Show Alchemy");
+        assert_eq!(check_display_name("  Show Alchemy\t").unwrap(), "Show Alchemy");
+        assert_eq!(check_display_name("Éditeur — Ünïcode 編集").unwrap(), "Éditeur — Ünïcode 編集");
+        let longest = "é".repeat(MAX_DISPLAY_NAME);
+        assert_eq!(check_display_name(&longest).unwrap(), longest);
+        let too_long = "x".repeat(MAX_DISPLAY_NAME + 1);
+        for bad in [
+            "",
+            " \t ",
+            &too_long,
+            "Show\nAlchemy",
+            "Show\rAlchemy",
+            "Show\0Alchemy",
+            "Show\u{1b}[31mAlchemy",
+            "Show\u{7f}",
+            "Show\u{85}Alchemy",
+            "Show\u{2028}Alchemy",
+            "Show \u{202e}ymehclA",
+            "Show \u{2067}Alchemy\u{2069}",
+            "Show\u{200f}",
+        ] {
+            assert!(check_display_name(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn file_labels() {
+        assert_eq!(file_label("Show Alchemy.AppImage"), "Show Alchemy");
+        assert_eq!(file_label("Trace Alchemy.appimage"), "Trace Alchemy");
+        assert_eq!(file_label("helper"), "helper");
+        assert_eq!(file_label(".AppImage"), ".AppImage");
+        assert_eq!(file_label("Ünï.AppImage"), "Ünï");
+        assert_eq!(file_label("ü"), "ü");
     }
 
     #[test]
@@ -379,7 +484,7 @@ pub(crate) mod tests {
         std::fs::write(dir.join("Loop.AppImage"), b"old").unwrap();
         std::fs::write(dir.join("Show.AppImage"), b"old").unwrap();
         std::fs::create_dir_all(dir.join("Odd.AppImage")).unwrap();
-        let m = |file: &str, id: Option<&str>| Member { file: file.into(), id: id.map(Into::into) };
+        let m = |file: &str, id: Option<&str>| Member { file: file.into(), id: id.map(Into::into), name: None };
         let members =
             [m("Loop.AppImage", Some("loop")), m("Show.AppImage", None), m("Trace.AppImage", None), m("Odd.AppImage", None)];
 

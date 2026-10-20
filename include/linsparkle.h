@@ -56,7 +56,8 @@ void linsparkle_set_install_path(const char *path);
  * other member replaces the file of the same name in the same directory,
  * only if that file is already there. Nothing is replaced unless every file
  * could be staged first. If the directory isn't writable, the update is
- * offered for download instead. */
+ * offered for download instead. The update window names the other apps by
+ * each member's "name" in the manifest (since 0.2.1), else by file name. */
 void linsparkle_set_bundle_mode(int enabled);
 
 /* In bundle mode, this app's "id" in the bundle's manifest, so its member is

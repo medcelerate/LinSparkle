@@ -160,6 +160,9 @@ pub struct BundleOptions {
 struct StagedFile {
     staged: PathBuf,
     target: PathBuf,
+    /// What to call it: the manifest's display name, else the file name
+    /// less `.AppImage`.
+    label: String,
 }
 
 /// An update written next to its targets, ready to rename over them. The
@@ -170,12 +173,11 @@ pub struct Staged {
 }
 
 impl Staged {
-    /// The file names of the other apps this update replaces.
+    /// The names of the other apps this update replaces, as the window
+    /// shows them: each one's display name from the bundle's manifest, else
+    /// its file name less `.AppImage`.
     pub fn others(&self) -> Vec<String> {
-        self.files[1..]
-            .iter()
-            .map(|f| f.target.file_name().unwrap_or_default().to_string_lossy().into_owned())
-            .collect()
+        self.files[1..].iter().map(|f| f.label.clone()).collect()
     }
 }
 
@@ -211,7 +213,8 @@ pub fn stage(target: &Path, data: &[u8], bundle: Option<&BundleOptions>) -> Resu
             let bytes = appimage_bytes(data, target)?;
             let staged = staged_path(target);
             write_staged(&staged, &mut bytes.as_slice())?;
-            Ok(Staged { files: vec![StagedFile { staged, target: target.to_path_buf() }] })
+            let label = bundle::file_label(&target.file_name().unwrap_or_default().to_string_lossy());
+            Ok(Staged { files: vec![StagedFile { staged, target: target.to_path_buf(), label }] })
         }
     }
 }
@@ -232,12 +235,19 @@ fn stage_bundle(target: &Path, data: &[u8], opts: &BundleOptions) -> Result<Stag
             None
         }
     };
+    // The manifest's display name, else the file name it's installed as.
+    let label_of = |name: &str, target: &Path| {
+        members.iter().find(|m| m.file == name).and_then(|m| m.name.clone()).unwrap_or_else(|| {
+            bundle::file_label(&target.file_name().unwrap_or_default().to_string_lossy())
+        })
+    };
     let mut files: Vec<StagedFile> = Vec::new();
     let result = bundle::walk(data, |name, reader| {
         let Some(target) = target_of(name) else { return Ok(()) };
         let staged = staged_path(&target);
         write_staged(&staged, reader)?;
-        files.push(StagedFile { staged, target });
+        let label = label_of(name, &target);
+        files.push(StagedFile { staged, target, label });
         Ok(())
     });
     let mut staged = Staged { files };
@@ -278,7 +288,7 @@ pub fn install(staged: Staged) -> Result<(), String> {
         return Err(e);
     }
     let failed: Vec<String> = files.filter_map(|f| replace(&f).err()).collect();
-    let app_name = app.target.file_name().unwrap_or_default().to_string_lossy();
+    let app_name = &app.label;
     if let Ok(dir) = std::fs::File::open(app.target.parent().unwrap_or(Path::new("."))) {
         let _ = dir.sync_all();
     }
@@ -575,8 +585,8 @@ mod tests {
             (
                 bundle::MANIFEST,
                 br#"{"members": [
-                    {"file": "Loop Alchemy.AppImage", "id": "loop"},
-                    {"file": "Show Alchemy.AppImage", "id": "show"},
+                    {"file": "Loop Alchemy.AppImage", "id": "loop", "name": "Loop Alchemy Suite"},
+                    {"file": "Show Alchemy.AppImage", "id": "show", "name": "Show Alchemy Player"},
                     {"file": "Trace Alchemy.AppImage", "id": "trace"}]}"#,
             ),
         ])
@@ -597,7 +607,8 @@ mod tests {
         let target = dir.join("Loop Alchemy.AppImage");
         let opts = BundleOptions::default();
         let staged = stage(&target, &suite_bundle(), Some(&opts)).unwrap();
-        assert_eq!(staged.others(), ["Show Alchemy.AppImage", "Trace Alchemy.AppImage"]);
+        // By display name, else file name.
+        assert_eq!(staged.others(), ["Show Alchemy Player", "Trace Alchemy"]);
         // Staged, but nothing replaced yet.
         assert_eq!(std::fs::read(&target).unwrap(), b"old loop");
         assert_eq!(listing(&dir).len(), 6);
@@ -684,7 +695,7 @@ mod tests {
         std::fs::remove_file(dir.join("Trace Alchemy.AppImage")).unwrap();
         std::fs::create_dir(dir.join("Trace Alchemy.AppImage")).unwrap();
         let err = install(staged).unwrap_err();
-        assert!(err.starts_with("Loop Alchemy.AppImage was updated"), "{err}");
+        assert!(err.starts_with("Loop Alchemy Suite was updated"), "{err}");
         assert!(err.contains("Trace Alchemy.AppImage"), "{err}");
         assert_eq!(std::fs::read(&target).unwrap(), l);
         assert_eq!(std::fs::read(dir.join("Show Alchemy.AppImage")).unwrap(), s);

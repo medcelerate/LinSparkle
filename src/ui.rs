@@ -306,19 +306,10 @@ fn megabytes(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / 1_000_000.0)
 }
 
-/// "A", "A and B", "A, B and C", without the `.AppImage` extensions.
-fn list_apps(files: &[String]) -> String {
-    let names: Vec<&str> = files
-        .iter()
-        .map(|f| {
-            let cut = f.len().saturating_sub(".AppImage".len());
-            match f.get(cut..) {
-                Some(ext) if cut > 0 && ext.eq_ignore_ascii_case(".AppImage") => &f[..cut],
-                _ => f.as_str(),
-            }
-        })
-        .collect();
-    match names.as_slice() {
+/// "A", "A and B", "A, B and C": the other apps a bundle updates, by the
+/// names `Staged::others` gives them.
+fn list_apps(names: &[String]) -> String {
+    match names {
         [] => String::new(),
         [one] => one.to_string(),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
@@ -577,14 +568,69 @@ pub fn run(cfg: Config, interactive: bool, host_pid: u32, can_relaunch: bool) ->
 #[cfg(test)]
 mod tests {
     use super::list_apps;
+    use crate::bundle::{self, tests::bundle as bundle_tgz, tests::elf};
+    use crate::install;
 
     #[test]
     fn lists_apps() {
         let l = |v: &[&str]| list_apps(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
         assert_eq!(l(&[]), "");
-        assert_eq!(l(&["Show Alchemy.AppImage"]), "Show Alchemy");
-        assert_eq!(l(&["Show Alchemy.AppImage", "Trace Alchemy.appimage"]), "Show Alchemy and Trace Alchemy");
-        assert_eq!(l(&["A.AppImage", "B", "C.AppImage"]), "A, B and C");
-        assert_eq!(l(&[".AppImage"]), ".AppImage");
+        assert_eq!(l(&["Show Alchemy"]), "Show Alchemy");
+        assert_eq!(l(&["Show Alchemy", "Trace Alchemy"]), "Show Alchemy and Trace Alchemy");
+        assert_eq!(l(&["A", "B", "C"]), "A, B and C");
+    }
+
+    #[test]
+    fn lists_apps_by_their_manifest_names() {
+        let (l, s, t, x) = (elf("loop"), elf("show"), elf("trace"), elf("extra"));
+        let dir = std::env::temp_dir().join(format!("linsparkle-ui-names-{}", std::process::id()));
+        let (loop_file, show_file, trace_file) = (
+            "Excalibur_Loop_Alchemy-x86_64.AppImage",
+            "Excalibur_Show_Alchemy-x86_64.AppImage",
+            "Excalibur_Trace_Alchemy-x86_64.AppImage",
+        );
+        // What the ready page says the update also replaces, run from Loop
+        // with Show, Trace and a helper installed beside it.
+        let also_updates = |manifest: Option<&[u8]>| {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            for f in [loop_file, show_file, trace_file, "extra-tool"] {
+                std::fs::write(dir.join(f), b"old").unwrap();
+            }
+            let mut files: Vec<(&str, &[u8])> =
+                vec![(loop_file, &l), (show_file, &s), (trace_file, &t), ("extra-tool", &x)];
+            if let Some(m) = manifest {
+                files.push((bundle::MANIFEST, m));
+            }
+            let opts = install::BundleOptions::default();
+            let staged = install::stage(&dir.join(loop_file), &bundle_tgz(&files), Some(&opts)).unwrap();
+            let text = list_apps(&staged.others());
+            install::discard(staged);
+            text
+        };
+        // Named, unnamed (its file name less .AppImage) and a member that
+        // isn't an AppImage; in the order of their files, as staged.
+        assert_eq!(
+            also_updates(Some(
+                br#"{"members": [
+                {"file": "Excalibur_Loop_Alchemy-x86_64.AppImage", "id": "loop", "name": "Loop Alchemy"},
+                {"file": "Excalibur_Show_Alchemy-x86_64.AppImage", "name": "Show Alchemy"},
+                {"file": "Excalibur_Trace_Alchemy-x86_64.AppImage", "name": "  Trace Alchemy "},
+                {"file": "extra-tool"}]}"#
+            )),
+            "Show Alchemy, Trace Alchemy and extra-tool"
+        );
+        assert_eq!(
+            also_updates(Some(
+                br#"{"members": [
+                {"file": "Excalibur_Loop_Alchemy-x86_64.AppImage"},
+                {"file": "Excalibur_Show_Alchemy-x86_64.AppImage", "name": "Show Alchemy"},
+                {"file": "Excalibur_Trace_Alchemy-x86_64.AppImage", "name": null}]}"#
+            )),
+            "Show Alchemy and Excalibur_Trace_Alchemy-x86_64"
+        );
+        // No manifest: file names, as before names.
+        assert_eq!(also_updates(None), "Excalibur_Show_Alchemy-x86_64, Excalibur_Trace_Alchemy-x86_64 and extra-tool");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
