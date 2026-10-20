@@ -24,8 +24,12 @@
 //! loop or toolkit. When someone installs an update, the helper verifies it,
 //! swaps it in over the running AppImage (`$APPIMAGE`), arranges a relaunch,
 //! and calls the shutdown callback for the app to quit.
+//!
+//! In bundle mode (`set_bundle_mode`) one update can replace a suite of
+//! AppImages installed side by side; see the README.
 
 mod appcast;
+mod bundle;
 #[cfg(feature = "capi")]
 mod capi;
 mod install;
@@ -51,6 +55,8 @@ const ENV_INSTALL_PATH: &str = "LINSPARKLE_INSTALL_PATH";
 const ENV_HOST_PID: &str = "LINSPARKLE_HOST_PID";
 const ENV_CAN_RELAUNCH: &str = "LINSPARKLE_CAN_RELAUNCH";
 const ENV_ICON: &str = "LINSPARKLE_ICON";
+const ENV_BUNDLE: &str = "LINSPARKLE_BUNDLE";
+const ENV_BUNDLE_APP_ID: &str = "LINSPARKLE_BUNDLE_APP_ID";
 const ALL_ENV: &[&str] = &[
     ENV_MODE,
     ENV_APPCAST,
@@ -61,6 +67,8 @@ const ALL_ENV: &[&str] = &[
     ENV_HOST_PID,
     ENV_CAN_RELAUNCH,
     ENV_ICON,
+    ENV_BUNDLE,
+    ENV_BUNDLE_APP_ID,
 ];
 /// What the helper prints on stdout when the app should quit to finish an
 /// update.
@@ -80,6 +88,12 @@ pub(crate) struct Config {
     pub install_path: Option<PathBuf>,
     /// A PNG for the update window; else the AppImage's `.DirIcon`.
     pub icon_path: Option<PathBuf>,
+    /// Bundle mode: a `.tar.gz` update may also replace the other AppImages
+    /// of a suite installed beside this one.
+    pub bundle: bool,
+    /// This app's id in a bundle's manifest, to find its member when its
+    /// file has been renamed.
+    pub bundle_app_id: Option<String>,
 }
 
 type Callback = Arc<dyn Fn() + Send + Sync>;
@@ -101,6 +115,8 @@ static STATE: Mutex<State> = Mutex::new(State {
         app_version: String::new(),
         install_path: None,
         icon_path: None,
+        bundle: false,
+        bundle_app_id: None,
     },
     install_path_set: false,
     automatic: false,
@@ -157,6 +173,27 @@ pub fn set_app_icon(path: impl Into<PathBuf>) {
     state().config.icon_path = Some(path.into());
 }
 
+/// Bundle mode: let one update replace a suite of AppImages installed side
+/// by side. Off by default. When on, a `.tar.gz` update is a bundle of
+/// several AppImages (optionally with a `linsparkle-bundle.json` manifest):
+/// the running AppImage is replaced by its own member, and every other
+/// member replaces the file of the same name in the same directory, only
+/// if that file is already there. Nothing is replaced unless every file
+/// could be staged first. A bare AppImage, or a tarball holding one, is
+/// installed as without bundle mode. If the directory isn't writable,
+/// updates are offered for download instead.
+pub fn set_bundle_mode(enabled: bool) {
+    state().config.bundle = enabled;
+}
+
+/// In bundle mode, this app's `id` in the bundle's manifest. The member
+/// with this id replaces the running AppImage even when its file has been
+/// renamed; without one (or without a match) the member with the running
+/// AppImage's file name does. An empty id clears it.
+pub fn set_bundle_app_id(id: &str) {
+    state().config.bundle_app_id = Some(id.trim().to_string()).filter(|id| !id.is_empty());
+}
+
 /// Check by itself, from `init()`, once every `set_update_check_interval`.
 pub fn set_automatic_check_for_updates(enabled: bool) {
     state().automatic = enabled;
@@ -189,6 +226,8 @@ pub fn run_if_helper() {
             .filter(|p| !p.is_empty())
             .map(PathBuf::from),
         icon_path: std::env::var_os(ENV_ICON).filter(|p| !p.is_empty()).map(PathBuf::from),
+        bundle: env(ENV_BUNDLE) == "1",
+        bundle_app_id: Some(env(ENV_BUNDLE_APP_ID)).filter(|id| !id.is_empty()),
     };
     let interactive = mode == "interactive";
     let host_pid = env(ENV_HOST_PID).parse().unwrap_or(0);
@@ -270,6 +309,8 @@ fn spawn_helper(interactive: bool) {
         .env(ENV_HOST_PID, std::process::id().to_string())
         .env(ENV_CAN_RELAUNCH, if s.shutdown.is_some() { "1" } else { "0" })
         .env(ENV_ICON, cfg.icon_path.clone().unwrap_or_default())
+        .env(ENV_BUNDLE, if cfg.bundle { "1" } else { "0" })
+        .env(ENV_BUNDLE_APP_ID, cfg.bundle_app_id.clone().unwrap_or_default())
         .stdin(Stdio::null())
         .stdout(Stdio::piped());
     let mut child = match cmd.spawn() {

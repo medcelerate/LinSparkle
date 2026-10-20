@@ -63,6 +63,20 @@ pub unsafe extern "C" fn linsparkle_set_install_path(path: *const c_char) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn linsparkle_set_bundle_mode(enabled: c_int) {
+    crate::set_bundle_mode(enabled != 0);
+}
+
+/// # Safety
+/// `id` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn linsparkle_set_bundle_app_id(id: *const c_char) {
+    if let Some(id) = unsafe { string(id) } {
+        crate::set_bundle_app_id(&id);
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn linsparkle_set_automatic_check_for_updates(state: c_int) {
     crate::set_automatic_check_for_updates(state != 0);
 }

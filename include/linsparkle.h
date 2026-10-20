@@ -49,6 +49,21 @@ void linsparkle_set_app_icon(const char *path);
  * updates open in the browser. */
 void linsparkle_set_install_path(const char *path);
 
+/* Bundle mode (since 0.2): one update replaces a suite of AppImages
+ * installed side by side. Off (0) by default. When on, a .tar.gz update is a
+ * bundle of several AppImages, optionally with a linsparkle-bundle.json
+ * manifest: the running AppImage is replaced by its own member, and every
+ * other member replaces the file of the same name in the same directory,
+ * only if that file is already there. Nothing is replaced unless every file
+ * could be staged first. If the directory isn't writable, the update is
+ * offered for download instead. */
+void linsparkle_set_bundle_mode(int enabled);
+
+/* In bundle mode, this app's "id" in the bundle's manifest, so its member is
+ * found even if its AppImage was renamed. Otherwise the member with the
+ * running AppImage's file name is used. "" clears it. */
+void linsparkle_set_bundle_app_id(const char *id);
+
 /* Check automatically from linsparkle_init(), once per interval. Off by default. */
 void linsparkle_set_automatic_check_for_updates(int state);
 
