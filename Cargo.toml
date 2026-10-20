@@ -1,6 +1,6 @@
 [package]
 name = "linsparkle"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Sparkle-style updates for Linux AppImages: the same appcasts and Ed25519 signatures as Sparkle and WinSparkle"
 license = "MIT OR Apache-2.0"
@@ -26,3 +26,12 @@ ureq = "3"
 # The C API (linsparkle_* functions, include/linsparkle.h). Build the C
 # libraries with scripts/build-c-libs.sh.
 capi = []
+
+# The C libraries (scripts/build-c-libs.sh) are built with this; an app that
+# uses LinSparkle as a Rust crate builds it with its own profile instead.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+# The C API catches no panics, and one crossing extern "C" aborts anyway.
+panic = "abort"

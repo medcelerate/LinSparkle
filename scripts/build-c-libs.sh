@@ -57,6 +57,18 @@ case "$TARGET" in
 esac
 
 cp "$STATIC" "$OUT/lib/"
+# Ship both without debug info, most of which is the prebuilt Rust std's.
+# Before the smoke tests, so they link what's shipped.
+case "$TARGET" in
+  *apple*)
+    strip -x "$OUT/lib/$SHARED"
+    strip -S "$OUT/lib/liblinsparkle.a"
+    ;;
+  *)
+    strip --strip-unneeded "$OUT/lib/$SHARED"
+    strip --strip-debug "$OUT/lib/liblinsparkle.a"
+    ;;
+esac
 cp include/linsparkle.h "$OUT/include/"
 cp LICENSE-MIT LICENSE-APACHE README.md "$OUT/"
 cat > "$OUT/lib/pkgconfig/linsparkle.pc" <<PC
