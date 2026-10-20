@@ -1,6 +1,6 @@
 [package]
 name = "linsparkle"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2024"
 description = "Sparkle-style updates for Linux AppImages: the same appcasts and Ed25519 signatures as Sparkle and WinSparkle"
 license = "MIT OR Apache-2.0"
@@ -18,6 +18,7 @@ flate2 = "1"
 libc = "0.2"
 png = "0.18"
 roxmltree = "0.21"
+serde_json = "1"
 slint = { version = "1.17", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-systemfonts"] }
 tar = "0.4"
 ureq = "3"

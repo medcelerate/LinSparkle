@@ -19,6 +19,9 @@ int main(void) {
     linsparkle_set_app_details("Smoke Test", "1.0.0");
     linsparkle_set_app_icon(NULL);
     linsparkle_set_install_path("/nonexistent/Smoke.AppImage");
+    linsparkle_set_bundle_mode(1);
+    linsparkle_set_bundle_app_id("smoke");
+    linsparkle_set_bundle_app_id(NULL);
     linsparkle_set_update_check_interval(60);
     linsparkle_set_automatic_check_for_updates(0);
     linsparkle_set_shutdown_request_callback(on_shutdown);

@@ -9,6 +9,8 @@ int main() {
         return 1;
     }
     linsparkle_set_app_details("Smoke Test", "1.0.0");
+    linsparkle_set_bundle_mode(1);
+    linsparkle_set_bundle_app_id("smoke");
     linsparkle_set_shutdown_request_callback([] {});
     linsparkle_init();
     if (linsparkle_is_checking()) {

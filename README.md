@@ -44,6 +44,8 @@ fn main() {
 | `win_sparkle_check_update_with_ui` | `check_update_with_ui` |
 | `win_sparkle_check_update_without_ui` | `check_update_without_ui` |
 | `win_sparkle_cleanup` | `cleanup` |
+| — | `set_install_path`, `set_app_icon` |
+| — | `set_bundle_mode`, `set_bundle_app_id` ([bundle mode](#bundle-mode)) |
 
 ## From C and C++
 
@@ -64,6 +66,8 @@ int main(int argc, char **argv) {
     linsparkle_set_eddsa_public_key("<base64 Ed25519 public key>");
     linsparkle_set_app_details("My App", "1.2.0");
     linsparkle_set_shutdown_request_callback(quit_my_app);
+    /* Optional: one update for a suite of AppImages (see Bundle mode). */
+    /* linsparkle_set_bundle_mode(1); linsparkle_set_bundle_app_id("my-app"); */
     linsparkle_init();
     /* ... */
     linsparkle_cleanup();
@@ -76,10 +80,10 @@ from wherever it's unpacked), or fetch it:
 ```cmake
 include(FetchContent)
 FetchContent_Declare(linsparkle
-  URL https://github.com/medcelerate/LinSparkle/releases/download/v0.1.4/linsparkle-0.1.4-x86_64-unknown-linux-gnu.tar.gz
+  URL https://github.com/medcelerate/LinSparkle/releases/download/v0.2.0/linsparkle-0.2.0-x86_64-unknown-linux-gnu.tar.gz
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(linsparkle)   # or skip these and set CMAKE_PREFIX_PATH
-find_package(linsparkle 0.1 REQUIRED PATHS ${linsparkle_SOURCE_DIR})
+find_package(linsparkle 0.2 REQUIRED PATHS ${linsparkle_SOURCE_DIR})
 
 target_link_libraries(myapp PRIVATE linsparkle::linsparkle)   # shared
 # or linsparkle::static, which brings the system libraries it needs
@@ -110,7 +114,9 @@ CMake, and runs them.
 - **What gets installed.** The appcast enclosure is either a bare `.AppImage`
   or a `.tar.gz` holding one. Downloads never keep the executable bit, but a
   tarball does. The whole file must match the item's `sparkle:edSignature`
-  before anything is written.
+  before anything is written. If a tarball holds several AppImages, the one
+  with the running AppImage's file name is installed, else the first; in
+  [bundle mode](#bundle-mode) the others are installed too.
 - **Replacing the running app.** The new AppImage is staged next to the
   running one (`$APPIMAGE`, or `set_install_path`) and renamed over it.
   Linux allows this: the running copy keeps its inode.
@@ -124,9 +130,89 @@ CMake, and runs them.
 - **What it remembers.** Skipped versions and the last check time are kept
   in `$XDG_CONFIG_HOME/linsparkle/<app>/`.
 
+## Bundle mode
+
+For a suite of apps shipped as AppImages installed side by side, say
+`~/Applications/Suite/Editor.AppImage`, `Player.AppImage` and
+`Converter.AppImage`: one update, from any of them, replaces them all, like
+a macOS suite `.pkg`. It's off by default; turn it on in each app:
+
+```rust
+linsparkle::set_bundle_mode(true);
+linsparkle::set_bundle_app_id("editor"); // optional, see below
+```
+
+```c
+linsparkle_set_bundle_mode(1);
+linsparkle_set_bundle_app_id("editor");  /* optional */
+```
+
+**The bundle** is the appcast enclosure: a `.tar.gz` holding the AppImages
+at its top level and, optionally, a `linsparkle-bundle.json` manifest. The
+appcast itself is unchanged, and the whole archive is checked against the
+item's `sparkle:edSignature` before anything is written, as always.
+
+```json
+{
+  "members": [
+    { "file": "Editor.AppImage", "id": "editor" },
+    { "file": "Player.AppImage", "id": "player" },
+    { "file": "Converter.AppImage", "id": "converter" }
+  ]
+}
+```
+
+Each member's `file` is the name it's installed under; `id` is optional.
+Without a manifest every ELF file in the archive is a member. Build it flat,
+with the main app first (see [older versions](#older-versions-and-bundles)):
+
+```sh
+tar czf Suite-1.2.0.tar.gz -C build Editor.AppImage Player.AppImage Converter.AppImage linsparkle-bundle.json
+```
+
+**What it installs.** In the directory of the running AppImage (`$APPIMAGE`,
+or `set_install_path`), and nowhere else:
+
+- The running AppImage is replaced by its own member: the one whose `id` is
+  the app's `set_bundle_app_id` (so a renamed AppImage is still found), else
+  the one with the same file name, else the only member.
+- Every other member replaces the file of the same name in that directory,
+  **only if that file is already there** and is a plain file (not a link).
+  Apps someone doesn't have aren't installed.
+- Everything is staged next to its target first, then renamed over it,
+  the running app first. If any file can't be staged, nothing is replaced.
+  If the running app can't be replaced, nothing is; if another app can't
+  be, the rest still are and the error says which.
+- Each installed file is executable (`+x`, plus whatever wider permissions
+  the old file had).
+- The update window says which other apps the update also replaces.
+
+**Other apps that are open** keep running: renaming over a running AppImage
+is fine on Linux, and the new version starts when that app is next opened.
+Only the app that installed the update is relaunched.
+
+**When the directory isn't writable**, the update is offered for download
+(the item's `<link>`, or the file) instead of installed.
+
+**What a bundle may contain.** It's refused, before anything is written, if
+any entry is a link (symbolic or hard), a directory other than the archive's
+own `./`, or anything but a regular file; if any name has a `/` or is `..`;
+if a name appears twice; or if the manifest lists a name that isn't a plain
+file name (no `/`, not starting with `.`), or a file the archive doesn't
+hold as an executable. Other files (a README, macOS `._` files) are ignored.
+
+### Older versions and bundles
+
+From 0.2, an app without bundle mode installs just one AppImage from a
+bundle: the one named like its own, else the first. LinSparkle 0.1 always
+installs the first `.AppImage` in a tarball over the running app, whichever
+app that is. So don't serve a bundle to apps built with 0.1, except the one
+whose AppImage comes first in the archive.
+
 ## Appcast
 
-Same format as Sparkle. LinSparkle ignores items whose enclosure has a
+Same format as Sparkle, for a single AppImage and for a
+[bundle](#bundle-mode) alike. LinSparkle ignores items whose enclosure has a
 `sparkle:os` other than `linux`, so one feed can serve every platform:
 
 ```xml
@@ -140,6 +226,16 @@ Same format as Sparkle. LinSparkle ignores items whose enclosure has a
 </item>
 ```
 
+For a bundle, `url` is the bundle's `.tar.gz` and the signature is over
+the whole archive:
+
+```xml
+<enclosure sparkle:os="linux" sparkle:version="1.2.0"
+           sparkle:edSignature="<base64 signature of Suite-1.2.0.tar.gz>"
+           url="https://example.com/Suite-1.2.0.tar.gz" length="0"
+           type="application/gzip" />
+```
+
 Sign with Sparkle's `sign_update`, or with openssl:
 
 ```sh
@@ -149,7 +245,7 @@ openssl pkeyutl -sign -inkey ed25519_priv.pem -rawin -in MyApp-1.2.0.tar.gz | ba
 ## Try it
 
 ```sh
-cargo run --example demo -- <appcast-url> <base64-public-key> [current-version] [appimage-to-replace]
+cargo run --example demo -- [--bundle[=<app-id>]] <appcast-url> <base64-public-key> [current-version] [appimage-to-replace]
 ```
 
 Building on Linux needs fontconfig (`libfontconfig1-dev`), which Slint uses

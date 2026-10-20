@@ -88,6 +88,8 @@ mod window {
             in property <bool> has-link;
             in property <image> app-icon;
             in property <bool> has-icon;
+            // Bundle mode: the other apps this update also replaces.
+            in property <string> also-updates;
 
             callback dismiss();
             callback skip();
@@ -173,7 +175,7 @@ mod window {
                     spacing: 10px;
                     Heading { text: "Ready to install"; }
                     Body {
-                        text: root.app-name + " " + root.new-version + " has been downloaded and verified." + (root.can-relaunch ? " " + root.app-name + " will quit and reopen to finish installing." : "");
+                        text: root.app-name + " " + root.new-version + " has been downloaded and verified." + (root.also-updates != "" ? " It also updates " + root.also-updates + "." : "") + (root.can-relaunch ? " " + root.app-name + " will quit and reopen to finish installing." : "");
                     }
                     Rectangle { vertical-stretch: 1; }
                     HorizontalLayout {
@@ -228,7 +230,7 @@ const PAGE_INSTALLED: i32 = 6;
 #[derive(Default)]
 struct Session {
     item: Option<Item>,
-    staged: Option<PathBuf>,
+    staged: Option<install::Staged>,
 }
 
 fn lock(s: &Mutex<Session>) -> std::sync::MutexGuard<'_, Session> {
@@ -240,6 +242,7 @@ fn show_page(w: &UpdateWindow, page: i32) {
     let (width, height) = match page {
         PAGE_AVAILABLE => (680.0, 500.0),
         PAGE_ERROR => (540.0, 210.0),
+        PAGE_READY if !w.get_also_updates().is_empty() => (540.0, 200.0),
         _ => (540.0, 170.0),
     };
     w.window().set_size(slint::LogicalSize::new(width, height));
@@ -303,6 +306,25 @@ fn megabytes(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / 1_000_000.0)
 }
 
+/// "A", "A and B", "A, B and C", without the `.AppImage` extensions.
+fn list_apps(files: &[String]) -> String {
+    let names: Vec<&str> = files
+        .iter()
+        .map(|f| {
+            let cut = f.len().saturating_sub(".AppImage".len());
+            match f.get(cut..) {
+                Some(ext) if cut > 0 && ext.eq_ignore_ascii_case(".AppImage") => &f[..cut],
+                _ => f.as_str(),
+            }
+        })
+        .collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// Run the helper; returns the process exit code.
 pub fn run(cfg: Config, interactive: bool, host_pid: u32, can_relaunch: bool) -> i32 {
     // The helper is the host app's own executable, so Slint's default pick
@@ -325,7 +347,15 @@ pub fn run(cfg: Config, interactive: bool, host_pid: u32, can_relaunch: bool) ->
         }
     };
     let app_name = if cfg.app_name.is_empty() { "This app".to_string() } else { cfg.app_name.clone() };
-    let target = cfg.install_path.clone().filter(|p| p.is_file());
+    // In bundle mode, also only when the directory takes new files: the
+    // other apps' updates are staged there too. Otherwise, as before, the
+    // update is offered for download.
+    let target = cfg
+        .install_path
+        .clone()
+        .filter(|p| p.is_file())
+        .filter(|p| !cfg.bundle || install::dir_writable(p));
+    let bundle = cfg.bundle.then(|| install::BundleOptions { app_id: cfg.bundle_app_id.clone() });
     let cfg = Arc::new(cfg);
     let session = Arc::new(Mutex::new(Session::default()));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -346,7 +376,7 @@ pub fn run(cfg: Config, interactive: bool, host_pid: u32, can_relaunch: bool) ->
         move || {
             cancel.store(true, Ordering::Relaxed);
             if let Some(staged) = lock(&session).staged.take() {
-                install::discard(&staged);
+                install::discard(staged);
             }
             quit();
         }
@@ -405,6 +435,7 @@ pub fn run(cfg: Config, interactive: bool, host_pid: u32, can_relaunch: bool) ->
             let session = session.clone();
             let cfg = cfg.clone();
             let cancel = cancel.clone();
+            let bundle = bundle.clone();
             std::thread::spawn(move || {
                 let agent = install::agent(&cfg);
                 let mut last = Instant::now() - Duration::from_secs(1);
@@ -423,18 +454,22 @@ pub fn run(cfg: Config, interactive: bool, host_pid: u32, can_relaunch: bool) ->
                     });
                 };
                 let result = install::download(&agent, &cfg, &item, &cancel, progress)
-                    .and_then(|data| install::stage(&target, &data));
+                    .and_then(|data| install::stage(&target, &data, bundle.as_ref()));
                 if cancel.load(Ordering::Relaxed) {
                     if let Ok(staged) = result {
-                        install::discard(&staged);
+                        install::discard(staged);
                     }
                     return;
                 }
                 let has_link = item.link.is_some();
                 match result {
                     Ok(staged) => {
+                        let others = list_apps(&staged.others());
                         lock(&session).staged = Some(staged);
-                        let _ = weak.upgrade_in_event_loop(|w| show_page(&w, PAGE_READY));
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            w.set_also_updates(others.into());
+                            show_page(&w, PAGE_READY);
+                        });
                     }
                     Err(e) => {
                         eprintln!("linsparkle: {e}");
@@ -456,7 +491,7 @@ pub fn run(cfg: Config, interactive: bool, host_pid: u32, can_relaunch: bool) ->
                 (s.staged.take(), s.item.as_ref().is_some_and(|i| i.link.is_some()))
             };
             let Some(staged) = staged else { return };
-            if let Err(e) = install::install(&staged, &target) {
+            if let Err(e) = install::install(staged) {
                 eprintln!("linsparkle: {e}");
                 show_error(&w, &e, has_link);
                 return;
@@ -537,4 +572,19 @@ pub fn run(cfg: Config, interactive: bool, host_pid: u32, can_relaunch: bool) ->
         return 1;
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::list_apps;
+
+    #[test]
+    fn lists_apps() {
+        let l = |v: &[&str]| list_apps(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(l(&[]), "");
+        assert_eq!(l(&["Show Alchemy.AppImage"]), "Show Alchemy");
+        assert_eq!(l(&["Show Alchemy.AppImage", "Trace Alchemy.appimage"]), "Show Alchemy and Trace Alchemy");
+        assert_eq!(l(&["A.AppImage", "B", "C.AppImage"]), "A, B and C");
+        assert_eq!(l(&[".AppImage"]), ".AppImage");
+    }
 }

@@ -1,15 +1,25 @@
 //! Try the update flow against a feed:
 //!
-//!     cargo run --example demo -- <appcast-url> <base64-public-key> [current-version] [appimage-to-replace] [icon.png]
+//!     cargo run --example demo -- [--bundle[=<app-id>]] <appcast-url> <base64-public-key> [current-version] [appimage-to-replace] [icon.png]
 //!
 //! Without an AppImage path (and no `$APPIMAGE`), updates open in the browser.
+//! `--bundle` turns on bundle mode, with an optional app id.
 
 fn main() {
     linsparkle::run_if_helper();
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(flag) = args.first().filter(|a| *a == "--bundle" || a.starts_with("--bundle=")).cloned() {
+        args.remove(0);
+        linsparkle::set_bundle_mode(true);
+        if let Some(id) = flag.strip_prefix("--bundle=") {
+            linsparkle::set_bundle_app_id(id);
+        }
+    }
     let [url, key, rest @ ..] = args.as_slice() else {
-        eprintln!("usage: demo <appcast-url> <base64-public-key> [current-version] [appimage-to-replace] [icon.png]");
+        eprintln!(
+            "usage: demo [--bundle[=<app-id>]] <appcast-url> <base64-public-key> [current-version] [appimage-to-replace] [icon.png]"
+        );
         std::process::exit(2);
     };
     linsparkle::set_appcast_url(url);
