@@ -1,7 +1,8 @@
 name: CI
 
 # Tests on Linux, then builds the C libraries (static and shared, with the
-# header and a pkg-config file) for x86_64 and aarch64 Linux. A v* tag also
+# header, a CMake package and a pkg-config file) for x86_64 and aarch64
+# Linux. A v* tag also
 # publishes them as a GitHub release.
 
 on:
@@ -48,13 +49,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install system libraries
-        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES g++ pkg-config
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES g++ pkg-config cmake
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Build, link the C and C++ smoke tests, package
+      - name: Build, link the C and C++ smoke tests (directly and with CMake), package
         run: scripts/build-c-libs.sh ${{ matrix.target }}
 
       - name: Check the shared library exports only linsparkle_*

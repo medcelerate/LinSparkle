@@ -50,7 +50,8 @@ fn main() {
 Each [release](https://github.com/medcelerate/LinSparkle/releases) has
 `linsparkle-<version>-<target>.tar.gz` packages for x86_64 and aarch64 Linux.
 Each package holds `include/linsparkle.h`, `lib/liblinsparkle.so`,
-`lib/liblinsparkle.a` and `lib/pkgconfig/linsparkle.pc`. The functions are
+`lib/liblinsparkle.a`, a CMake package (`lib/cmake/linsparkle`) and
+`lib/pkgconfig/linsparkle.pc`. The functions are
 WinSparkle's, renamed from `win_sparkle_*` to `linsparkle_*`. The same header
 works from C++.
 
@@ -69,6 +70,24 @@ int main(int argc, char **argv) {
 }
 ```
 
+With CMake, point `CMAKE_PREFIX_PATH` at the unpacked package (it works
+from wherever it's unpacked), or fetch it:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(linsparkle
+  URL https://github.com/medcelerate/LinSparkle/releases/download/v0.1.4/linsparkle-0.1.4-x86_64-unknown-linux-gnu.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(linsparkle)   # or skip these and set CMAKE_PREFIX_PATH
+find_package(linsparkle 0.1 REQUIRED PATHS ${linsparkle_SOURCE_DIR})
+
+target_link_libraries(myapp PRIVATE linsparkle::linsparkle)   # shared
+# or linsparkle::static, which brings the system libraries it needs
+```
+
+`find_package` turns down a package built for another OS or processor, or
+from another release series (before 1.0, a different minor version).
+
 ```sh
 export PKG_CONFIG_PATH=/path/to/linsparkle-<version>-<target>/lib/pkgconfig
 cc app.c $(pkg-config --cflags --libs linsparkle)          # shared
@@ -79,8 +98,9 @@ cc app.c $(pkg-config --cflags linsparkle) /path/to/lib/liblinsparkle.a \
 The shared library exports only the `linsparkle_*` functions. The static
 library has Slint inside it, so don't link it into an app that also links
 Slint; use the shared library there. To build the packages yourself, run
-`scripts/build-c-libs.sh [target]`. It also links C and C++ smoke tests
-against both libraries and runs them.
+`scripts/build-c-libs.sh [target]` (it needs CMake 3.16 or newer). It also
+links C and C++ smoke tests against both libraries, directly and through
+CMake, and runs them.
 
 ## How it works
 

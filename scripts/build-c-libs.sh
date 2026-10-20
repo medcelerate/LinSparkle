@@ -84,6 +84,92 @@ Libs.private: $NATIVE_LIBS
 Cflags: -I\${includedir}
 PC
 
+# The CMake package: find_package(linsparkle) with CMAKE_PREFIX_PATH at the
+# unpacked tarball. Paths are relative to the config file, like the .pc's.
+# The static target's system libraries are rustc's list as CMake items:
+# -lfoo becomes foo, and -framework Foo stays one item.
+CMAKE_LIBS=()
+for ((i = 0; i < ${#NATIVE[@]}; i++)); do
+  case "${NATIVE[$i]}" in
+    -framework) CMAKE_LIBS+=("-framework ${NATIVE[$((i + 1))]}"); i=$((i + 1)) ;;
+    -l*) CMAKE_LIBS+=("${NATIVE[$i]#-l}") ;;
+    *) CMAKE_LIBS+=("${NATIVE[$i]}") ;;
+  esac
+done
+CMAKE_LINK=$(IFS=';'; echo "${CMAKE_LIBS[*]}")
+case "$TARGET" in
+  *apple*) CMAKE_OS=Darwin; SONAME="@rpath/$SHARED" ;;
+  *) CMAKE_OS=Linux; SONAME=$SHARED ;;
+esac
+case "$TARGET" in
+  x86_64-*) CMAKE_ARCHES="x86_64 AMD64 amd64" ;;
+  aarch64-*) CMAKE_ARCHES="aarch64 arm64 ARM64" ;;
+  *) CMAKE_ARCHES="" ;;
+esac
+# Before 1.0 a minor release may break things, after it a major one.
+MAJOR=${VERSION%%.*}; MINOR=${VERSION#*.}; MINOR=${MINOR%%.*}
+if [ "$MAJOR" = 0 ]; then
+  SAME_SERIES="PACKAGE_FIND_VERSION_MAJOR EQUAL 0 AND PACKAGE_FIND_VERSION_MINOR EQUAL $MINOR"
+else
+  SAME_SERIES="PACKAGE_FIND_VERSION_MAJOR EQUAL $MAJOR"
+fi
+mkdir -p "$OUT/lib/cmake/linsparkle"
+cat > "$OUT/lib/cmake/linsparkle/linsparkleConfig.cmake" <<CMAKE
+# LinSparkle $VERSION for $TARGET. Defines:
+#   linsparkle::linsparkle  the shared library; use this in an app that also links Slint
+#   linsparkle::static      the static library, with the system libraries it needs
+get_filename_component(_linsparkle_prefix "\${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+if(NOT TARGET linsparkle::linsparkle)
+  add_library(linsparkle::linsparkle SHARED IMPORTED)
+  set_target_properties(linsparkle::linsparkle PROPERTIES
+    IMPORTED_LOCATION "\${_linsparkle_prefix}/lib/$SHARED"
+    IMPORTED_SONAME "$SONAME"
+    INTERFACE_INCLUDE_DIRECTORIES "\${_linsparkle_prefix}/include")
+endif()
+if(NOT TARGET linsparkle::static)
+  add_library(linsparkle::static STATIC IMPORTED)
+  set_target_properties(linsparkle::static PROPERTIES
+    IMPORTED_LOCATION "\${_linsparkle_prefix}/lib/liblinsparkle.a"
+    IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+    INTERFACE_INCLUDE_DIRECTORIES "\${_linsparkle_prefix}/include"
+    INTERFACE_LINK_LIBRARIES "$CMAKE_LINK")
+endif()
+unset(_linsparkle_prefix)
+CMAKE
+cat > "$OUT/lib/cmake/linsparkle/linsparkleConfigVersion.cmake" <<CMAKE
+# Suitable when built for this OS and processor, and compatible when from
+# the same release series and at least as new as the version asked for.
+set(PACKAGE_VERSION "$VERSION")
+set(PACKAGE_VERSION_COMPATIBLE FALSE)
+if(NOT PACKAGE_FIND_VERSION)
+  set(PACKAGE_VERSION_COMPATIBLE TRUE)
+elseif(PACKAGE_FIND_VERSION VERSION_LESS_EQUAL PACKAGE_VERSION AND $SAME_SERIES)
+  set(PACKAGE_VERSION_COMPATIBLE TRUE)
+  if(PACKAGE_FIND_VERSION VERSION_EQUAL PACKAGE_VERSION)
+    set(PACKAGE_VERSION_EXACT TRUE)
+  endif()
+endif()
+set(_linsparkle_arch "\${CMAKE_SYSTEM_PROCESSOR}")
+if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+  set(_linsparkle_arch "\${CMAKE_OSX_ARCHITECTURES}")
+endif()
+set(_linsparkle_suitable FALSE)
+if(CMAKE_SYSTEM_NAME STREQUAL "$CMAKE_OS")
+  foreach(_linsparkle_ok $CMAKE_ARCHES)
+    if(_linsparkle_arch STREQUAL _linsparkle_ok)
+      set(_linsparkle_suitable TRUE)
+    endif()
+  endforeach()
+endif()
+if(NOT _linsparkle_suitable)
+  set(PACKAGE_VERSION "\${PACKAGE_VERSION} ($TARGET)")
+  set(PACKAGE_VERSION_UNSUITABLE TRUE)
+endif()
+unset(_linsparkle_arch)
+unset(_linsparkle_ok)
+unset(_linsparkle_suitable)
+CMAKE
+
 # Link the smoke tests both ways and run them. The static builds point at
 # the .a by path so the linker can't pick the shared library instead.
 TESTS=$(mktemp -d)
@@ -97,6 +183,17 @@ $CC -std=c99 -Wall -Werror -D_DEFAULT_SOURCE -I "$OUT/include" examples/c/demo.c
 "$TESTS/cpp-static"
 "$TESTS/c-shared"
 "$TESTS/cpp-shared"
+
+# Again through find_package, against both CMake targets; and a version
+# from another release series must be turned down.
+CMAKE_ARGS=(-DCMAKE_PREFIX_PATH="$PWD/$OUT" -DCMAKE_BUILD_TYPE=Release)
+cmake -S tests/cmake -B "$TESTS/cmake" "${CMAKE_ARGS[@]}" -DLINSPARKLE_VERSION="$VERSION" > /dev/null
+cmake --build "$TESTS/cmake" > /dev/null
+for t in c-static cpp-static c-shared cpp-shared; do "$TESTS/cmake/cmake-$t"; done
+if cmake -S tests/cmake -B "$TESTS/cmake-other" "${CMAKE_ARGS[@]}" -DLINSPARKLE_VERSION="$((MAJOR + 1)).0" > /dev/null 2>&1; then
+  echo "find_package accepted linsparkle $((MAJOR + 1)).0" >&2
+  exit 1
+fi
 
 tar czf "dist/$NAME.tar.gz" -C dist "$NAME"
 echo "built dist/$NAME.tar.gz"
